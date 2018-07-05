@@ -15,6 +15,7 @@
  */
 package org.foo;
 
+import com.google.common.collect.ImmutableList;
 import org.apache.felix.scr.annotations.Activate;
 import org.apache.felix.scr.annotations.Component;
 import org.apache.felix.scr.annotations.Deactivate;
@@ -27,7 +28,9 @@ import org.onosproject.cluster.ClusterService;
 import org.onosproject.cluster.NodeId;
 import org.onosproject.core.ApplicationId;
 import org.onosproject.core.CoreService;
+import org.onosproject.core.GroupId;
 import org.onosproject.floodlightpof.protocol.OFMatch20;
+import org.onosproject.floodlightpof.protocol.OFPacketOut;
 import org.onosproject.floodlightpof.protocol.action.OFAction;
 import org.onosproject.floodlightpof.protocol.table.OFFlowTable;
 import org.onosproject.floodlightpof.protocol.table.OFTableType;
@@ -47,23 +50,25 @@ import org.onosproject.net.flow.criteria.Criteria;
 import org.onosproject.net.flow.criteria.Criterion;
 import org.onosproject.net.flow.instructions.DefaultPofActions;
 import org.onosproject.net.flow.instructions.DefaultPofInstructions;
+import org.onosproject.net.flow.instructions.Instruction;
+import org.onosproject.net.group.*;
 import org.onosproject.net.packet.InboundPacket;
 import org.onosproject.net.packet.PacketContext;
 import org.onosproject.net.packet.PacketProcessor;
 import org.onosproject.net.packet.PacketService;
 import org.onosproject.net.table.DefaultFlowTable;
 import org.onosproject.net.table.FlowTable;
+import org.onosproject.net.table.FlowTableId;
 import org.onosproject.net.table.FlowTableStore;
+import org.onosproject.openflow.controller.DefaultOpenFlowPacketContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.onosproject.net.table.FlowTableService;
 import org.onosproject.net.flow.FlowRuleService;
 import com.google.common.base.Objects;
 import javax.xml.soap.Node;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-
+import java.util.*;
+import org.jboss.netty.channel.Channel;
 import com.google.common.base.*;
 
 /**
@@ -96,23 +101,34 @@ public class AppComponent {
     @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
     protected PacketService packetService;
 
+
+    @Reference(cardinality = ReferenceCardinality.MANDATORY_UNARY)
+    protected GroupService groupService;
+
     private ApplicationId AppId;
     private ReactivePacketProcessor processor = new ReactivePacketProcessor();
     private final Logger log = LoggerFactory.getLogger(getClass());
     private NodeId local;
     private DeviceId deviceId;
     private int tableId;
+    private NodeId master;
+    private Channel channel;
 
     @Activate
-    protected void activate() {
+    protected void activate() throws InterruptedException {
         AppId = coreService.registerApplication("org.foo.app");
         log.info("Started");
         local = clusterService.getLocalNode().id();
         Iterable<Device> devices = deviceService.getAvailableDevices();
         Iterator<Device> deviceIterator=devices.iterator();
-        deviceId = deviceIterator.next().id();
+        while (deviceIterator.hasNext()){
+            deviceId = deviceIterator.next().id();
+        }
         log.info("deviceId is {}",deviceId);
-        NodeId master = mastershipService.getMasterFor(deviceId);
+        if(deviceId != null){
+            master = mastershipService.getMasterFor(deviceId);
+
+        }
         if (Objects.equal(master, local)) {
             log.info("equal");
             log.info("deviceId is {}",deviceId);
@@ -122,14 +138,33 @@ public class AppComponent {
                 log.info("port in portList:" + port.toString());
                 deviceService.changePortState(deviceId, port.number(), true);
             }
-           tableId= sendPofFlowTable(deviceId);
+           // tableId= sendPofFlowTable(deviceId);
+
+
+//            Timer timer = new Timer();
+//            TimerTask timerTask = new TimerTask() {
+//                @Override
+//                public void run() {
+//                   return ;
+//                }
+//            };
+//            timer.schedule(timerTask,10);
+
+           // sendPofFlowRule(deviceId,tableId);
         }
-        packetService.addProcessor(processor, PacketProcessor.director(2));
+       // packetService.addProcessor(processor, PacketProcessor.director(2));
+//        if(local.equals(master)){
+//
+//        }
+        log.info("sendGroupMod");
+        sendGroupMod();
+
 
     }
 
+
     private int sendPofFlowTable(DeviceId deviceId) {
-        int tableId=0;
+
         byte smallTableId;
         tableId = tableStore.getNewGlobalFlowTableId(deviceId, OFTableType.OF_MM_TABLE);
         OFMatch20 srcIP = new OFMatch20();
@@ -168,36 +203,30 @@ public class AppComponent {
         flowTableService.applyFlowTables(flowTable);
         log.info("++++ send flow table successfully");
         return tableId;
-        //match
-//        TrafficSelector.Builder pbuilder = DefaultTrafficSelector.builder();
-//        //matchInport
-//        pbuilder.add(Criteria.matchOffsetLength((short)1,(short)0,(short)48,"000000000002","ffffffffffff"));
-//        //
-//        TrafficTreatment.Builder ppbuilder = DefaultTrafficTreatment.builder();
-//        List<OFAction>actions=new ArrayList<>();
-//        actions.add(DefaultPofActions.deleteField(0,48).action());
-//        short no1=0;
-//        short no2=0;
-//        short no3=0;
-//        actions.add(DefaultPofActions.addField(no1,no2,48,"222222222222").action());
-//        actions.add( DefaultPofActions.setField(no1, no2, 48, "222222222222", "ffffffffffff").action());
-//        actions.add(DefaultPofActions.output(no1,no2,no3,0).action());
-//        ppbuilder.add(DefaultPofInstructions.applyActions(actions));
-//       FlowRule flowrule =  DefaultFlowRule.builder()
-//                .forDevice(deviceId)
-//                .forTable(tableId)
-//                .withSelector(pbuilder.build())
-//                .withTreatment(ppbuilder.build())
-//                .withPriority(1)
-//                .makePermanent()
-//                .withCookie(newFlowEntryId)
-//                .build();
-//        //flowRuleService.applyFlowRules(flowrule);
+    }
+    private void sendGroupMod() {
+        log.info("begin sendGroupMod");
+        GroupId groupId = new GroupId(123);
+        byte[] keyData = "abc".getBytes();
+        final GroupKey groupKey = new DefaultGroupKey(keyData);
+        TrafficTreatment.Builder builder = DefaultTrafficTreatment.builder();
+        List<OFAction> actions = new ArrayList<OFAction>();
+        int outPort=0;
+        actions.add(DefaultPofActions.output((short) 0, (short) 0, (short) 0, outPort).action());
 
+        builder.add(DefaultPofInstructions.applyActions(actions));
+
+        short weight = 5;
+        GroupBucket bucket = DefaultGroupBucket.createSelectGroupBucket(builder.build(), weight);
+        GroupBuckets groupBuckets = new GroupBuckets(ImmutableList.of(bucket));
+        DefaultGroupDescription groupDescription = new DefaultGroupDescription(deviceId,
+                GroupDescription.Type.SELECT,
+                groupBuckets, groupKey, groupId.id(), AppId);
+        log.info("app groupDescription : {}", groupDescription.toString());
+        groupService.addGroup(groupDescription);
 
     }
     private void sendPofFlowRule(DeviceId deviceId,int tableId){
-        tableId=0;
         log.info("tableId : {}", tableId);
         int newFlowEntryId=tableStore.getNewFlowEntryId(deviceId,tableId);
         log.info("++++ newFlowEntryId; {}",newFlowEntryId);
@@ -246,33 +275,37 @@ public class AppComponent {
 
     @Deactivate
     protected void deactivate() {
-
-        log.info("Stopped");
+        flowTableService.removeFlowTablesByTableId(deviceId,new FlowTableId(0));
         packetService.removeProcessor(processor);
         processor = null;
+        log.info("Stopped");
     }
     private class ReactivePacketProcessor implements PacketProcessor{
         @Override
         public void process(PacketContext packetContext) {
-            log.info("get the packet");
-            if (packetContext.isHandled()) {
-                log.info("packetContext isHandled");
-                return;
-            }
+          //  log.info("get the packet");
+//            if (packetContext.isHandled()) {
+//                log.info("packetContext isHandled");
+//                return;
+//            }
             InboundPacket pkt = packetContext.inPacket();
             Ethernet ethpkt = pkt.parsed();
-            log.info("packet in successfully");
-            packetOut(packetContext, PortNumber.portNumber(1));
-            sendPofFlowRule(deviceId,tableId);
+           // log.info("packet in successfully");
+            packetOut(packetContext, PortNumber.FLOOD);
+           // packetOut(packetContext, PortNumber.portNumber(1));
+            //sendPofFlowRule(deviceId,tableId);
         }
 
         private void packetOut(PacketContext packetContext, PortNumber portNumber) {
-            log.info("packet out begin");
-            List<OFAction>actions=new ArrayList<>();
-            actions.add(DefaultPofActions.output((short)0,(short)0,(short)0,(int)portNumber.toLong()).action());
-            packetContext.treatmentBuilder().add(DefaultPofInstructions.applyActions(actions));
+            //log.info("packet out begin");
+            //List<OFAction>actions=new ArrayList<>();
+           // actions.add(DefaultPofActions.output((short)0,(short)0,(short)0,(int)portNumber.toLong()).action());
+            //packetContext.treatmentBuilder().add(DefaultPofInstructions.applyActions(actions));
+
+//            OFPacketOut pktout = null;
+            packetContext.treatmentBuilder().setOutput(portNumber);
             packetContext.send();
-            log.info("packet out successfully");
+           // log.info("packet out successfully");
         }
     }
 }
